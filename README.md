@@ -1,4 +1,4 @@
-# Sustainable Time Series Classification (anonymized for reviewers)
+# Sustainable Time Series Classification - Code & Results
 
 This repository accompanies our research paper on **Pruning Extensions and Efficiency Trade-Offs for Sustainable Time Series Classification**, which is currently under review and published as a [preprint on arXiv](https://arxiv.org/abs/2604.07953). 
 
@@ -18,13 +18,14 @@ Our work systematically explores predictive performance, runtime, and energy con
 .
 ├── results/                   # Experimental logs and figures
 ├── tsc/                       # Code for running experiments
+├── .gitignore
+├── README.md
+├── requirements.txt           # Python dependencies
 ├── run_analysis.py            # Analysis & exploration (based on STREP)
 ├── run_deep_train.sh          # Train deep learning models
 ├── run_deep_eval.sh           # Evaluate deep learning models
 ├── run_hybrid_train.sh        # Train hybrid and pruned models
-├── run_hybrid_eval.sh         # Evaluate hybrid and pruned models
-├── requirements.txt           # Python dependencies
-└── README.md
+└── run_hybrid_eval.sh         # Evaluate hybrid and pruned models
 ```
 
 ## 👨‍💻 Usage
@@ -61,7 +62,7 @@ mlflow run -e main.py -P gpu=0 -P dataset=Pedestrian -P model=Hydra -P prune_rat
 
 #### Additional Setup
 1. For accessing the [MONSTER](https://huggingface.co/monster-monash) datasets, you might need to log in to Hugging Face on your machine. In the newly created experiment environment, run `huggingface-cli login`.
-2. Energy tracking via [CodeCarbon and Groundtruth Smart Sockets](https://github.com/lamarr-institute/lamarr-energy-tracker) is included in our code, but remember that [CodeCarbon](https://github.com/mlco2/codecarbon) might require [special permissions for measuring CPU energy via RAPL](https://docs.codecarbon.io/latest/introduction/rapl/). If there are issues, just remove the tracking in [main.py script](tsc/main.py).
+2. Energy tracking via [CodeCarbon and Groundtruth Smart Sockets](https://github.com/lamarr-institute/lamarr-energy-tracker) is included in our code, but remember that [CodeCarbon](https://github.com/mlco2/codecarbon) might require [special permissions for measuring CPU energy via RAPL](https://docs.codecarbon.io/latest/introduction/rapl/). If there are any issues, just remove the tracking from our [main.py](tsc/main.py).
 3. Some models like MLP and MCDCNN were observed to occasionally crash for certain configurations. One central issue is the handling of `nan` probabilities, which can be manually fixed by changing lines 78-82 in `[conda_env_dir]/lib/python3.12/site-packages/sktime/classification/deep_learning/base.py` to
 
 ```python
@@ -90,10 +91,10 @@ bash run_hybrid_eval.sh [gpu_id] [data_dir] [results_dir] [pruned_csv_summary] #
 
 ### Citing
 
-If you appreciate our work and code, please cite our paper:
+If you appreciate our work and code, please cite our [paper](https://arxiv.org/abs/2604.07953):
 
 ```
-@article{fischer2026pruningextensionsefficiencytradeoffs,
+@article{fischer_efftsc,
       title={Pruning Extensions and Efficiency Trade-Offs for Sustainable Time Series Classification}, 
       author={Raphael Fischer and Angus Dempster and Sebastian Buschjäger and Matthias Jakobs and Urav Maniar and Geoffrey I. Webb},
       year={2026},
