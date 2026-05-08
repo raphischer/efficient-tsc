@@ -7,10 +7,11 @@ Our work systematically explores predictive performance, runtime, and energy con
 - Propose a **holistic evaluation framework** for comparing quality vs. resources in TSC
 - Apply a **theoretically bounded pruning strategy** to state-of-the-art hybrid classifiers `Hydra` and `Quant`
 - Introduce the novel `Hydrant` model variant, combining both feature transformations
-- Conduct **4000+ experimental runs** across:
+- Conduct **4000+ experimental evaluations** across:
   - 20 MONSTER datasets  
   - 13 TSC methods  
-  - 3 compute environments
+  - 3 hardware environments
+  - various hyperparameters
 
 ## 📂 Repository Structure
 
