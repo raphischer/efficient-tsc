@@ -1,0 +1,15 @@
+name: tsc
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+    - huggingface_hub==1.1.2
+    - datasets==4.4.1
+    - mlflow-skinny==3.5.1
+    - lamarr-energy-tracker==0.1.2
+    - tensorflow[and-cuda]==2.20.0
+    - sktime==0.39.0
+    - torch==2.9.0
+    - torchvision==0.24.0
+    - torchaudio==2.9.0
+    - einops==0.8.1

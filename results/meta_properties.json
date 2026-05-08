@@ -1,0 +1,49 @@
+{
+    "energy_per_sample": {
+        "name": "Energy Draw per Sample",
+        "shortname": "ENI",
+        "unit": "wattseconds",
+        "group": "Resources"
+    },
+    "time_per_sample": {
+        "name": "Running Time per Sample",
+        "shortname": "RTI",
+        "unit": "seconds",
+        "group": "Resources"
+    },
+    "bal_acc": {
+        "name": "Balanced Accuracy",
+        "shortname": "bACC",
+        "unit": "percent",
+        "group": "Quality",
+        "maximize": true
+    },
+    "accuracy": {
+        "name": "Accuracy",
+        "shortname": "ACC",
+        "unit": "percent",
+        "group": "Quality",
+        "maximize": true
+    },
+    "weighted_f1": {
+        "name": "Weighted F1",
+        "shortname": "wF1",
+        "unit": "percent",
+        "group": "Quality",
+        "maximize": true
+    },
+    "macro_f1": {
+        "name": "Macro F1",
+        "shortname": "MaF1",
+        "unit": "percent",
+        "group": "Quality",
+        "maximize": true
+    },
+    "micro_f1": {
+        "name": "Micro F1",
+        "shortname": "MiF1",
+        "unit": "percent",
+        "group": "Quality",
+        "maximize": true
+    }
+}
