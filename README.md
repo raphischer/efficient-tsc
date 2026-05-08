@@ -16,7 +16,6 @@ Our work systematically explores predictive performance, runtime, and energy con
 ## 📂 Repository Structure
 
 ```
-.
 ├── results/                   # Experimental logs and figures
 ├── tsc/                       # Code for running experiments
 ├── .gitignore
@@ -36,6 +35,8 @@ Install dependencies (tested with Python 3.12):
 ```bash
 pip install -r requirements.txt
 ```
+
+After that, you can explore our results or run custom experiments!
 
 ### 📊 Analysis & Interactive Exploration
 
@@ -76,7 +77,7 @@ return np.array([
 
 #### Run All Experiments
 
-You can use our bash scripts to run all experimental configurations. They also iteratively create a experiment summary, similar to the csv files in our [results](results/) directory. Make sure to provide the correct command-line parameters for your setup, as they are passed to our [main.py script](ts_archive_experiments/main).
+You can use our bash scripts to rerun all experimental configurations. They also automatically create experiment summaries, similar to the csv files in our [results](results/) directory. Make sure to provide the correct command-line parameters for your setup, as they are passed onto the [main.py script](tsc/main).
 
 ```bash
 bash run_deep_train.sh [gpu_id] [data_dir] [results_dir] # trains standard and special DL classifiers
@@ -90,7 +91,7 @@ bash run_deep_eval.sh [gpu_id] [data_dir] [results_dir] [deep_csv_summary] # eva
 bash run_hybrid_eval.sh [gpu_id] [data_dir] [results_dir] [pruned_csv_summary] # evaluates Quant, Hydra, Hydrant and pruned variants
 ```
 
-### Citing
+### 📝 Citing
 
 If you appreciate our work and code, please cite our [paper](https://arxiv.org/abs/2604.07953):
 
