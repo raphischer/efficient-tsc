@@ -2,7 +2,7 @@
 # MONSTER: Monash Scalable Time Series Evaluation Repository
 # https://github.com/Navidfoumani/monster
 
-# adaptions and improvements by raphischer
+# adaptions and improvements by ANON2
 
 import os
 from copy import deepcopy

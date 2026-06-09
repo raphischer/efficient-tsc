@@ -2,7 +2,7 @@
 # Highly Scalable Time Series Classification for Very Large Datasets @ AALTD 2024 (ECML PKDD 2024)
 # https://github.com/angus924/aaltd2024
 
-# adaptions and improvements by raphischer
+# adaptions and improvements by ANON2
 
 import numpy as np
 import torch
