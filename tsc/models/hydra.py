@@ -1,18 +1,32 @@
-# Angus Dempster, Chang Wei Tan, Lynn Miller
-# Navid Mohammadi Foumani, Daniel F Schmidt, and Geoffrey I Webb
-# Highly Scalable Time Series Classification for Very Large Datasets
-# AALTD 2024 (ECML PKDD 2024)
-
-# Angus Dempster, Daniel F Schmidt, Geoffrey I Webb
+# based on original AALTD 2024 implementation by Angus Dempster, Daniel F Schmidt, Geoffrey I Webb
+# Highly Scalable Time Series Classification for Very Large Datasets @ AALTD 2024 (ECML PKDD 2024)
+# https://github.com/angus924/aaltd2024
 # HYDRA: Competing Convolutional Kernels for Fast and Accurate Time Series Classification
 # https://doi.org/10.1007/s10618-023-00939-3
 
 # adaptions and improvements by ANON2
 
+import math
+
 import numpy as np
 import torch, torch.nn as nn, torch.nn.functional as F
+import mlflow
 
 from models.ridge import RidgeClassifier
+
+
+def estimate_hydra_subbatches(n_instances, n_channels, length, num_kernels_per_group, num_groups, max_memory_gb=24.0, overhead=3, dtype=torch.float32):
+    """
+    Estimate how many subbatches are needed to keep hydra memory usage below max_memory_gb.
+    """
+    # Get dtype size in bytes
+    bytes_per_elem = torch.finfo(dtype).bits // 8
+    total_bytes = n_instances * n_channels * length * bytes_per_elem * num_kernels_per_group * num_groups * overhead # expected tensor sizes + some overhead
+    total_gb = total_bytes / (1024**3)
+    subbatch = math.ceil(total_gb / max_memory_gb) # Compute required number of splits so each fits under limit
+    if subbatch > 1:
+        print(f'Hydrant will perform Hydra transformations on {subbatch} sub-batches per {n_instances} instances batch, to not extend memory capacity of {max_memory_gb} GB.')
+    return subbatch # TODO improve by also checking whether pruned models might be able to handle larger batches?
 
 
 class HydraMultivariateGPU(nn.Module):
@@ -46,8 +60,36 @@ class HydraMultivariateGPU(nn.Module):
             self.important_groups = custom_imp_group_info
 
         self.register_buffer('num_features', torch.tensor(int(np.prod(self.W.shape) / config['kernel_length'] * 2), device=config['device'])) # counting min and max
+        self.subbatches = estimate_hydra_subbatches(config['batch_size'], config['n_channels'], config['length'], config['num_kernels_per_group'], config['num_groups'])
+        mlflow.log_param('hydra_subbatches', self.subbatches)
+        self.number_of_trained_parameters = self.I.shape.numel() + self.W.shape.numel()
         
     def forward(self, X):
+        if not isinstance(X, torch.Tensor):
+            X = torch.tensor(X.astype(np.float32, copy=False), device=self.W.device)
+        if X.device != self.W.device:
+            X = X.to(self.W.device)
+        if self.subbatches == 1: # no sub-batching
+            Z = self.transform_single(X.to(device=self.W.device))
+        else: # write sub-batch results into prepared tensor on specified device
+            i, Z = 0, torch.zeros((X.shape[0], self.num_features), device=self.W.device)
+            for X__ in torch.chunk(X, self.subbatches, dim=0):
+                Z[i:(i+X__.shape[0])] = self.transform_single(X__.to(device=self.W.device))
+                i += X__.shape[0]
+        
+        # OTHER SUB-BATCHING IMPLEMENTATIONS (but empirically slower!)
+        # write into list on CPU, and afterwards concat
+        # ZH_ = [ self.hydra(X__.to(device=self.config['device']))[0] for X__ in torch.chunk(X_, self.hydra_subbatch, dim=0) ] # smaller batches for Hydra, to not crash memory
+        # ZH_ = torch.cat(ZH_).to('cpu')
+        # write into prepared tensor on CPU
+        # ZH__, i = torch.zeros((ZQ.shape[0], self.hydra.num_features)), 0
+        # for X__ in torch.chunk(X_, self.hydra_subbatch, dim=0):
+        #     ZH__[i:(i+X__.shape[0])] = self.hydra(X__.to(device=self.config['device']))[0].to('cpu')
+        #     i += X__.shape[0]
+
+        return Z
+    
+    def transform_single(self, X):
 
         num_examples = X.shape[0]
         if self.divisor > 1 and (self.important_groups is None or self.important_groups['use_diff']):
@@ -91,10 +133,7 @@ class HydraMultivariateGPU(nn.Module):
         Z = torch.cat(Z, 1).view(num_examples, -1)    
         return Z.clamp(0).sqrt()
 
-    def transform(self, X):
-        return self(X)
-
-    def fit_transform(self, X, Y):
+    def transform(self, X, indices=None): # unified API, indices only used in Hydrant transformation
         return self(X)
 
 class Hydra(RidgeClassifier):

@@ -26,7 +26,7 @@ def prepare_group_info_io(important_groups, to_json=True, device='cpu'):
                     important_groups[key][key2] = torch.tensor(important_groups[key][key2], device=device)
     return important_groups
 
-def init_initermediate(model, transform, seed, device, n_est, cri, max_feat):
+def init_intermediate(model, transform, seed, device, n_est, cri, max_feat):
     if model == 'ridge':
         return RidgeClassifier(transform=transform, device=device, seed=seed)
     else:
@@ -37,12 +37,12 @@ class PrunedHydra:
 
     def __init__(self, config, **kwargs):
         self.config = config
-        self.trnsf = HydraMultivariateGPU(config)
-        self.clsf = RidgeClassifier(transform=self.trnsf, device=config["device"], seed=config['seed'], **kwargs)
+        self.transform = HydraMultivariateGPU(config)
+        self.clsf = RidgeClassifier(transform=self.transform, device=config["device"], seed=config['seed'], **kwargs)
         
     def fit(self, training_data, **kwargs):
         # train initial model and check feature importance
-        interm_clsf = init_initermediate(self.config['prune_intermediate'], self.trnsf, self.config['seed'], self.config['device'], self.config['num_estimators'], self.config['criterion'], self.config['max_features'])
+        interm_clsf = init_intermediate(self.config['prune_intermediate'], self.transform, self.config['seed'], self.config['device'], self.config['num_estimators'], self.config['criterion'], self.config['max_features'])
         interm_clsf.fit(training_data, **kwargs)
         imp = interm_clsf.ft_imp_coeffs()
         results = {
@@ -54,10 +54,10 @@ class PrunedHydra:
         print(f'Pruning {self.config["prune_rate"]*100:.0f}% of {results["n_ft_pre_prune"]} Hydra features with {results["ft_imp_type"]}')
         
         # identify groups with highest mean importance
-        kernel_imp = imp.view(self.trnsf.num_dilations, self.trnsf.divisor, self.trnsf.k, self.trnsf.h, 2) # reformat to access min and max response counts of kernels
+        kernel_imp = imp.view(self.transform.num_dilations, self.transform.divisor, self.transform.k, self.transform.h, 2) # reformat to access min and max response counts of kernels
         mean_kernel_imp = kernel_imp.mean(dim=-1) # average the min and max response count importance -> shape (D, divisor, k, h)
         imp_per_group = {}
-        for div, group in product(range(self.trnsf.divisor), range(self.trnsf.h)):
+        for div, group in product(range(self.transform.divisor), range(self.transform.h)):
             imp_per_group[(div, group)] = mean_kernel_imp[:, div, :, group].mean().item()
         sorted_imp = sorted(imp_per_group.items(), key=lambda item: item[1], reverse=True)
         important_groups = {}
@@ -68,11 +68,11 @@ class PrunedHydra:
 
         # Collect pruned kernels and info
         important_group_info, all_kernels, current_offset = {}, [], 0
-        for dil in range(self.trnsf.num_dilations):
+        for dil in range(self.transform.num_dilations):
             for div, groups in important_groups.items():
-                orig_kernels = self.trnsf.W[dil, int(div)]
+                orig_kernels = self.transform.W[dil, int(div)]
                 div_h = len(groups)
-                keep_kernels = orig_kernels.view(self.trnsf.k, self.trnsf.h, 1, self.trnsf.l)[:, groups].view(self.trnsf.k * div_h, 1, self.trnsf.l)
+                keep_kernels = orig_kernels.view(self.transform.k, self.transform.h, 1, self.transform.l)[:, groups].view(self.transform.k * div_h, 1, self.transform.l)
                 # Flatten and store
                 keep_kernels_flat = keep_kernels.flatten()
                 end_offset = current_offset + keep_kernels_flat.numel()
@@ -90,10 +90,10 @@ class PrunedHydra:
 
         # Concatenate all into single tensor
         important_group_info['use_diff'] = any([key.endswith('1') for key in important_group_info.keys()])
-        self.trnsf = HydraMultivariateGPU(self.config, torch.cat(all_kernels), important_group_info)
+        self.transform = HydraMultivariateGPU(self.config, torch.cat(all_kernels), important_group_info)
         
         # create final ridge classifier
-        self.clsf = RidgeClassifier(transform=self.trnsf, device=self.config['device'], seed=self.config['seed'], **kwargs)
+        self.clsf = RidgeClassifier(transform=self.transform, device=self.config['device'], seed=self.config['seed'], **kwargs)
         self.clsf.fit(training_data, **kwargs)
         results.update({
             'n_par_post_prune': self.count_params(),
@@ -106,9 +106,9 @@ class PrunedHydra:
 
     def save_to_disk(self, path):
         # after pruning, store the information in json and without torch datatypes
-        imp_group_info = prepare_group_info_io(self.trnsf.important_groups)
+        imp_group_info = prepare_group_info_io(self.transform.important_groups)
         json.dump(imp_group_info, open(os.path.join(path, "imp_groups.json"), 'w'))
-        self.trnsf.important_groups = prepare_group_info_io(imp_group_info, False, self.config["device"])
+        self.transform.important_groups = prepare_group_info_io(imp_group_info, False, self.config["device"])
         fsize = self.clsf.save_to_disk(path) + os.path.getsize(os.path.join(path, "imp_groups.json"))
         return fsize
         
@@ -119,9 +119,9 @@ class PrunedHydra:
             imp_group_info = prepare_group_info_io(imp_group_info, False, self.config["device"])
         # load weights
         state_dict = torch.load(os.path.join(path, "transform.pth"), map_location=self.config["device"])
-        self.trnsf = HydraMultivariateGPU(self.config, state_dict['W'], imp_group_info)
-        self.trnsf.load_state_dict(state_dict)
-        self.clsf = RidgeClassifier(transform=self.trnsf, device=self.config['device'], seed=self.config['seed'])
+        self.transform = HydraMultivariateGPU(self.config, state_dict['W'], imp_group_info)
+        self.transform.load_state_dict(state_dict)
+        self.clsf = RidgeClassifier(transform=self.transform, device=self.config['device'], seed=self.config['seed'])
         fsize = self.clsf.load_from_disk(path) + os.path.getsize(os.path.join(path, "imp_groups.json"))
         return fsize
 
@@ -131,18 +131,20 @@ class PrunedHydra:
     def _predict(self, test_data, **kwargs):
         return self.clsf._predict(test_data, **kwargs)
 
+    def _predict_single(self, X):
+        return self.clsf._predict_single(X)
+
 
 class PrunedQuant(QuantClassifier):
 
-    def __init__(self, prune_rate=0.8, prune_intermediate='ridge', classifier='XRF', num_estimators=100, max_depth=20, max_features=0.1, criterion="entropy", seed=None, limit_mb=-1, **kwargs):
-
-        super().__init__(classifier, num_estimators, max_depth, max_features, criterion, seed, limit_mb, **kwargs)
+    def __init__(self, ts_channels, ts_length, prune_rate=0.8, prune_intermediate='ridge', classifier='XRF', num_estimators=100, max_depth=20, max_features=0.1, criterion="entropy", seed=None, limit_mb=-1, **kwargs):
+        super().__init__(ts_channels, ts_length, classifier, num_estimators, max_depth, max_features, criterion, seed, limit_mb, **kwargs)
         self.prune_rate = prune_rate
         self.interm_model = prune_intermediate
 
     def fit(self, training_data, **kwargs):
         # fit intermediate model
-        interm_clsf = init_initermediate(self.interm_model, self.transform, self.seed, device='cpu', n_est=self.num_estimators, cri=self.criterion, max_feat=self.max_features)
+        interm_clsf = init_intermediate(self.interm_model, self.transform, self.seed, device='cpu', n_est=self.num_estimators, cri=self.criterion, max_feat=self.max_features)
         interm_clsf.fit(training_data)
         imp = interm_clsf.ft_imp_coeffs()
         results = {
@@ -156,7 +158,7 @@ class PrunedQuant(QuantClassifier):
         # identify mean feature importance per interval
         avg_imp = {}
         ft_offset = 0 # increases with each representation
-        for t_idx, transf in self.transform.models.items():
+        for t_idx, transf in enumerate(self.transform.models):
             self.transform.models[t_idx].important_intervals = [] # placeholder, later to be filled with intervals
             for interval_idx in np.unique(transf.ft_map):
                 interval_ft_idc = np.where(np.equal(transf.ft_map, interval_idx))[0]
@@ -176,7 +178,7 @@ class PrunedQuant(QuantClassifier):
         num_estimators_per_batch = self._set_num_estimators(num_batches)
         for i, (X, Y) in tqdm(enumerate(training_data), total=num_batches):
             self.classifier.n_estimators += num_estimators_per_batch[i]
-            Z = self.transform.transform(torch.tensor(X.astype(np.float32)))
+            Z = self.transform.transform(X)
             self.classifier.fit(Z, Y)
 
         results.update({

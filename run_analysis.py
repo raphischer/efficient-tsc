@@ -222,14 +222,19 @@ def get_cov_ellipse(x, y, n_std=2.0, num_points=100):
     
     return ellipse_rotated[0] + np.mean(x), ellipse_rotated[1] + np.mean(y)
 
-def prepare_df(df, average_folds=True, change_modelname=True):
+def prepare_df(df, average_folds=True, change_modelname=True, report_errors=False):
+    # check for errors
+    if report_errors:
+        for _, row in df[df['status'] == 'FAILED'].iterrows():
+            print(f"ERROR in {row['params.dataset']:<25} fold {row['params.fold']} for model {row['params.model']:<12} with pruning {row['params.prune_rate']:.2f} - error message: {row['tags.error']}")
     df = df[df["status"] == "FINISHED"]
+    # prepare columns and data
     df = df.drop([col for col in df.columns if "params." not in col and "metrics." not in col], axis=1)
     df = df.rename(lambda col: col.replace("metrics.", "").replace("params.", "").replace('architecture', 'environment'), axis=1)
     if change_modelname:
         df['model'] = df.apply(lambda r: replace_prune_name(r['model'], r['prune_rate']), axis=1) # encode prune info into model name!
     df['environment'] = df['environment'].map(lambda e: f"Intel {re.match(r'.*(i\d-\d*)', e).group(1)}" if 'Intel' in e else e.replace(' GeForce', ''))
-    df = df[df['model'] != 'SFCN'] # drop this baseline from the MONSTER paper
+    df = df[df['model'] != 'SFCN'] # drop this baseline from the MONSTER paper TODO remove?
     df['train_energy_total'] /= 3.6e6 # convert to kWh
     for col in ['bal_acc', 'accuracy', 'weighted_f1', 'macro_f1', 'micro_f1']:
         df[col] *= 100
@@ -317,32 +322,33 @@ if __name__ == '__main__':
 
     LOGS = {
         # hydra quant hydrant
-        'tsc_hybrid_0_2026-04-17_12-08-03.csv': 'Training',
-        'tsc_hybrid_-1_2026-04-28_13-56-26.csv': 'Inference', # i9
-        'tsc_hybrid_-1_2026-04-27_23-02-23.csv': 'Inference', # i7
-        'tsc_hybrid_0_2026-04-27_20-39-01.csv': 'Inference', # 4090
+        'tsc_hybrid_0_2026-05-19_16-31-21.csv': 'Training', # 4090
+        'tsc_hybrid_0_2026-05-22_05-51-25.csv': 'Inference', # 4090
+        'tsc_hybrid_-1_2026-05-22_15-43-21.csv': 'Inference', # i9
+        'tsc_hybrid_-1_2026-05-22_07-51-40.csv': 'Inference', # i7
         # deep learning
-        'tsc_deep_0_2026-03-29_14-17-17.csv': 'Training',
+        'tsc_deep_0_2026-03-29_14-17-17.csv': 'Training', # 4090
+        'tsc_deep_0_2026-04-13_11-44-56.csv': 'Inference', # 4090
         'tsc_deep_-1_2026-04-11_12-54-24.csv': 'Inference', # i9
         'tsc_deep_-1_2026-04-10_20-13-02.csv': 'Inference', # i7
-        'tsc_deep_0_2026-04-13_11-44-56.csv': 'Inference', # 4090
     }
 
-    MOD_ORDER = {'P80Quant': 'Quant',
+    MOD_ORDER = {'P80Hydrant': 'Hydrant',
+                 'P80Quant': 'Quant',
                  'P80Hydra': 'Hydra', 
-                 'P80Hydrant': 'Hydrant',
+                 'Hydrant': 'Hydrant',
                  'Quant': 'Quant',
                  'Hydra': 'Hydra',
-                 'Hydrant': 'Hydrant',
-                 'MCDCNN': 'Standard DL',
                  'MLP': 'Standard DL',
+                 'MCDCNN': 'Standard DL',
                  'ResNet': 'Standard DL',
                  'FCN': 'Standard DL',
+                 'ConvTran': 'Special DL',
                  'LSTMFCN': 'Special DL',
-                 'InceptionTime': 'Special DL',
-                 'ConvTran': 'Special DL'}
+                 'InceptionTime': 'Special DL'}
     TYPE_COL = {type: COL_SEL[i] for i, type in enumerate(['Quant', 'Hydra', 'Hydrant', 'Standard DL', 'Special DL'])}
     MOD_COL = {mod: TYPE_COL[type] for mod, type in MOD_ORDER.items()}
+    ACC_COL, ENI_COL, ENT_COL = 'bal_acc', 'energy_per_sample', 'train_energy_total'
 
     # check total amount of energy consumption
     logs = {'dev': [], 'fin': []}
@@ -352,7 +358,7 @@ if __name__ == '__main__':
             logs[which].append(pd.read_csv(fn, index_col=False))
         except:
             pass
-    ene = {key: pd.concat(dfs)[['metrics.infer_energy_total', 'metrics.train_energy_total']].sum().sum() / 3.6e6 for key, dfs in logs.items()}
+    ene = {key: pd.concat(dfs)[[f'metrics.{ENI_COL}', f'metrics.{ENT_COL}']].sum().sum() / 3.6e6 for key, dfs in logs.items()}
     print('\n\nFollowing the calls for transparent and sustainable reporting, we estimate the total ' \
           + f'amount of energy consumed by our evaluations to {ene["dev"]:3.0f}+{ene["fin"]:3.0f}={ene["dev"]+ene["fin"]:3.0f} kWh ' \
           + f'(representing the development and testing efforts as well as final experiment runs).\n\n')
@@ -372,10 +378,10 @@ if __name__ == '__main__':
     df_infer = df[df['task'] == 'Inference']
     df_abl = df[(df['task'] == 'Training') & (df['model'].isin(hyprid_models))]
     df_train = df[(df['task'] == 'Training') & (df['model'].isin(MOD_ORDER))]
-    df = pd.concat([data.sort_values('energy_per_sample').iloc[0] for _, data in df_infer.groupby(['dataset', 'environment', 'model'])], axis=1).transpose().reset_index(drop=True)
+    df = pd.concat([data.sort_values(ENI_COL).iloc[0] for _, data in df_infer.groupby(['dataset', 'environment', 'model'])], axis=1).transpose().reset_index(drop=True)
     for idx, r in df.iterrows():
         res = df_train[(df_train['model'] == r['model']) & (df_train['dataset'] == r['dataset'])]
-        for col in ['train_time_total', 'train_energy_total']:
+        for col in ['train_time_total', ENT_COL]:
             if res.shape[0] > 0:
                 assert np.isnan(res[col].std())
                 df.loc[idx,col] = res[col].mean()
@@ -397,7 +403,7 @@ if __name__ == '__main__':
     hybrid_df, _, _, _, _, _ = scale_and_rate(hybrid_df, meta)
     meta['properties']['compound'] = {'name': 'Compound Score', 'unit': 'compound'}
     meta['properties']['compound_index'] = {'name': 'Compound Score', 'unit': 'compound'}
-    meta['properties']['train_energy_total'] = {'name': 'Training Energy Draw', 'unit': 'kilowatthours'}
+    # meta['properties'][ENT_COL] = {'name': 'Training Energy Draw', 'unit': 'kilowatthours'}
 
     fname = print_init('colormap') ###############################################################################
     fig = go.Figure()
@@ -406,36 +412,39 @@ if __name__ == '__main__':
     fig.update_layout(yaxis_title='Color Key')
     finalize(fig, fname)
 
-    # fname = print_init('config_impact') ###############################################################################
-    # fig = make_subplots(rows=1, cols=3, shared_yaxes=True, horizontal_spacing=0.015)
-    # x_labels = {'Older CPU Impact on Energy [%]': [65, 165], 'GPU Impact on Energy [%]': [-5, 405], 'Batch Sizing Impact on Energy [%]': [95, 205]}
-    # legend = set()
-    # for m_idx, (mod, m_type) in enumerate(MOD_ORDER.items()):
-    #     c = TYPE_COL[m_type]
-    #     # col 1 & 2 - hardware impact (optimal batch size)
-    #     ene_i9 = df[(df['model'] == mod) & (df['environment'] == 'Intel i9-13900')].sort_values('dataset')['energy_per_sample']
-    #     ene_i7 = df[(df['model'] == mod) & (df['environment'] == 'Intel i7-6700')].sort_values('dataset')['energy_per_sample']
-    #     ene_gpu = df[(df['model'] == mod) & (df['environment'] == 'NVIDIA RTX 4090')].sort_values('dataset')['energy_per_sample']
-    #     x1 = ene_i7.values / ene_i9.values * 100
-    #     x2 = ene_gpu.values / ene_i9.values * 100
-    #     # col 3 - batch sizing impact across all envs
-    #     x3 = []
-    #     for _, ds_env_mod_data in df_infer[df_infer['model'] == mod].sort_values('energy_per_sample').groupby(['dataset', 'environment']):
-    #         x3.append(ds_env_mod_data['energy_per_sample'].iloc[1:].values / ds_env_mod_data['energy_per_sample'].iloc[0] * 100)
-    #     x3 = np.concat(x3)
-    #     for c_idx, x in enumerate([x1, x2, x3]):
-    #         fig.add_trace(go.Box(x=x, y=[mod]*x.shape[0], marker_color=c, orientation="h", name=m_type, showlegend=m_type not in legend), row=1, col=1+c_idx)
-    #         legend.add(m_type)
-    # for c_idx, (x_label, minmax) in enumerate(x_labels.items()):
-    #     fig.add_vline(x=100, row=1, col=1+c_idx)
-    #     fig.update_xaxes(title=x_label, range=minmax, row=1, col=1+c_idx)
-    # fig.update_layout(legend=dict(yanchor="bottom", y=1, xanchor="center", x=0.5, orientation='h'))
-    # finalize(fig, fname)
+    fname = print_init('config_impact') ###############################################################################
+    fig = make_subplots(rows=1, cols=4, shared_yaxes=True, horizontal_spacing=0.012)
+    x_labels = {'Old CPU Energy Impact [%]': [25, 140], 'Old CPU Runtime Impact [%]': [60, 800], 'GPU Energy Impact [%]': [-3, 420], 'Batch Sizing Energy Impact [%]': [97, 160]}
+    legend = set()
+    for m_idx, (mod, m_type) in enumerate(MOD_ORDER.items()):
+        c = TYPE_COL[m_type]
+        # col 1 & 2 - hardware impacts (with optimal batch size)
+        ene_i9 = df[(df['model'] == mod) & (df['environment'] == 'Intel i9-13900')].sort_values('dataset')[ENI_COL]
+        ene_i7 = df[(df['model'] == mod) & (df['environment'] == 'Intel i7-6700')].sort_values('dataset')[ENI_COL]
+        x1 = ene_i7.values / ene_i9.values * 100
+        time_i9 = df[(df['model'] == mod) & (df['environment'] == 'Intel i9-13900')].sort_values('dataset')['time_per_sample']
+        time_i7 = df[(df['model'] == mod) & (df['environment'] == 'Intel i7-6700')].sort_values('dataset')['time_per_sample']
+        x2 = time_i7.values / time_i9.values * 100
+        ene_gpu = df[(df['model'] == mod) & (df['environment'] == 'NVIDIA RTX 4090')].sort_values('dataset')[ENI_COL]
+        x3 = ene_gpu.values / ene_i9.values * 100
+        # col 3 - batch sizing impact across all envs
+        x4 = []
+        for _, ds_env_mod_data in df_infer[df_infer['model'] == mod].sort_values(ENI_COL).groupby(['dataset', 'environment']):
+            x4.append(ds_env_mod_data[ENI_COL].iloc[1:].values / ds_env_mod_data[ENI_COL].iloc[0] * 100)
+        x4 = np.concat(x4)
+        for c_idx, x in enumerate([x1, x2, x3, x4]):
+            fig.add_trace(go.Box(x=x, y=[mod]*x.shape[0], marker_color=c, orientation="h", name=m_type, showlegend=m_type not in legend), row=1, col=1+c_idx)
+            legend.add(m_type)
+    for c_idx, (x_label, minmax) in enumerate(x_labels.items()):
+        fig.add_vline(x=100, row=1, col=1+c_idx)
+        fig.update_xaxes(title=x_label, range=minmax, row=1, col=1+c_idx)
+    fig.update_layout(legend=dict(yanchor="bottom", y=1, xanchor="center", x=0.5, orientation='h'))
+    finalize(fig, fname)
 
     fname = print_init('pruning_ablation') ###############################################################################
     df_abl['model'] = df_abl['model'].map(lambda e: e[3:] if 'P' in e else e)
     fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.02)
-    cols = {'bal_acc': [100.5, 87], 'energy_per_sample': [102, 15]}
+    cols = {ACC_COL: [100.5, 87], ENI_COL: [102, 15]}
     for mod in ['Quant', 'Hydra', 'Hydrant']:
         mod_data = df_abl[df_abl['model'] == mod]
         res = {col: {} for col in cols}
@@ -462,27 +471,32 @@ if __name__ == '__main__':
     finalize(fig, fname)
 
     fname = print_init('pareto_performance') ###############################################################################
-    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.02)
-    displ, ycol, xcol = set(), 'bal_acc', 'energy_per_sample'
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02)
+    done_dl, displ = set(), set()
     for mod, mtype in MOD_ORDER.items():
         col = TYPE_COL[mtype]
-        for c_idx, env in enumerate(['Intel i9-13900', 'NVIDIA RTX 4090']):
+        if mtype == 'Standard DL' or mtype == 'Special DL': # only display first model from each example
+            if mtype in done_dl:
+                continue
+            done_dl.add(mtype)
+            mtype = mod
+        for r_idx, env in enumerate(['Intel i9-13900', 'NVIDIA RTX 4090']):
             mod_data = scaled_df[(scaled_df['model'] == mod) & (scaled_df['environment'] == env)]
-            x, y = mod_data[f'{xcol}_index'].values, mod_data[f'{ycol}_index'].values
-            fig.add_trace(go.Scatter(x=[np.mean(x)], y=[np.mean(y)], text=[mod], name=mtype, legendgroup=mtype, mode='markers+text', textposition="bottom center", textfont={'color': col}, marker={'color': col}, showlegend=mtype not in displ), row=1, col=c_idx+1)
+            x, y = mod_data[f'{ENI_COL}_index'].values, mod_data[f'{ACC_COL}_index'].values
+            fig.add_trace(go.Scatter(x=[np.mean(x)], y=[np.mean(y)], text=[mod], name=mtype, legendgroup=mtype, mode='markers+text', textposition="bottom center", textfont={'color': col}, marker={'color': col}, showlegend=False), row=1+r_idx, col=1)
             ex, ey = get_cov_ellipse(x, y, n_std=1.177) # 50% coverage
-            fig.add_trace(go.Scatter(x=ex, y=ey, mode='lines', line=dict(color=col), legendgroup=mtype, showlegend=False, opacity=0.5), row=1, col=c_idx+1)
+            fig.add_trace(go.Scatter(x=ex, y=ey, mode='lines', line=dict(color=col), legendgroup=mtype, showlegend=False, opacity=0.5), row=1+r_idx, col=1)
             displ.add(mtype)
-            fig.update_xaxes(title=f"Relative {FMT(xcol).split(' [')[0]} on {env}", range=[0, 1.02], row=1, col=c_idx+1)
-    for col in [1, 2]:
-        fig.add_layout_image(source=GRAD, xref="x domain", yref="y domain", x=1, y=1, xanchor="right", yanchor="top", sizex=1.0, sizey=1.0, sizing="stretch", opacity=0.3, layer="below", row=1, col=col)
-    fig.update_yaxes(title=f"Relative {FMT(ycol).split(' [')[0]}", range=[0.55, 1.02], row=1, col=1)
-    fig.update_layout(legend=dict(yanchor="bottom", y=0, xanchor="center", x=0.5, orientation='h'))
-    finalize(fig, fname)
+            fig.add_annotation(x=1, y=0.63, showarrow=False, text=f"Inference on {env}", xanchor="right", row=1+r_idx, col=1)
+            fig.update_yaxes(title=f"Relative {FMT(ACC_COL).split(' [')[0]}", range=[0.6, 1.02], row=r_idx+1, col=1)
+    for row in [1, 2]:
+        fig.add_layout_image(source=GRAD, xref="x domain", yref="y domain", x=1, y=1, xanchor="right", yanchor="top", sizex=1.0, sizey=1.0, sizing="stretch", opacity=0.3, layer="below", row=row, col=1)
+    fig.update_xaxes(title=f"Relative {FMT(ENI_COL).split(' [')[0]}", range=[0, 1.02], row=2, col=1)
+    finalize(fig, fname, ws=0.5, hs=1.5)
 
     fname = print_init('model_stats') ###############################################################################
     fig = make_subplots(rows=1, cols=4, shared_yaxes=True, horizontal_spacing=0.01)
-    cols = ['bal_acc', 'energy_per_sample', 'train_energy_total', 'compound_index']
+    cols = [ACC_COL, ENI_COL, ENT_COL, 'compound_index']
     col_min_max = {col: [np.inf, 0] for col in cols}
     legend = set()
     for m_idx, (mod, m_type) in enumerate(MOD_ORDER.items()):
@@ -496,15 +510,15 @@ if __name__ == '__main__':
             col_min_max[col][1] = max(col_min_max[col][1], q3)
     for c_idx, col in enumerate(cols):
         type, minmax = 'linear', col_min_max[col]
-        if col in ['energy_per_sample', 'train_energy_total']:
+        if col in [ENI_COL, ENT_COL]:
             type = 'log'
             minmax = [np.log10(minmax[0]), np.log10(minmax[1])]
-        fig.update_xaxes(title=FMT(col), range=minmax, type=type, row=1, col=1+c_idx)
+        fig.update_xaxes(title=FMT(col).replace(' Efficiency', ''), range=minmax, type=type, row=1, col=1+c_idx)
     fig.update_layout(legend=dict(yanchor="bottom", y=1, xanchor="center", x=0.5, orientation='h'))
     finalize(fig, fname)
 
     # statistical significance checks
-    for column in ['bal_acc', 'energy_per_sample', 'compound']:
+    for column in ['bal_acc', ENI_COL, 'compound']:
         fname = print_init(f'cd_{column}') ###############################################################################
         rel_columns = [hybrid_df['model'], hybrid_df['dataset'] + hybrid_df['environment'], hybrid_df[f'{column}_index']]
         stat_df = pd.concat(rel_columns, axis=1).rename({0: 'configuration'}, axis=1)

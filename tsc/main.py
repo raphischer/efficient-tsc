@@ -41,6 +41,8 @@ def initialization(args):
             for line in all_info.split("\n"):
                 if "model name" in line:
                     config['architecture'] = re.sub( ".*model name.*:", "", line,1).strip()
+        elif platform.system() == "Darwin":
+            config['architecture'] = subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string']).strip().decode('ascii')
     else: # use only first GPU and lookup name
         assert str(config['gpu']) in "0 1 2 3 4 5 6 7", "ERROR: GPU index must be between 0 and 7"
         os.environ["CUDA_VISIBLE_DEVICES"] = str(config['gpu'])
@@ -65,15 +67,17 @@ if __name__ == '__main__':
     parser.add_argument("--cache_dir", default=None, help="Directory to use for caching datasets")
     parser.add_argument("--fold", type=int, choices=[0, 1, 2, 3, 4], default=0, help="Pre-defined MONSTER dataset fold")
     # model and system
-    parser.add_argument("--model", default="Hydra", choices=["Hydrant", "Quant", "Hydra", "ConvTran", "FCN", "InceptionTime", "LSTMFCN", "MCDCNN", "MLP", "ResNet"], help='TSC model to run.')
+    parser.add_argument("--model", default="Hydra", choices=["Hydrant", "HydrantNaive", "Quant", "Hydra", "ConvTran", "FCN", "InceptionTime", "LSTMFCN", "MCDCNN", "MLP", "ResNet"], help='TSC model to run.')
     parser.add_argument('--batch_size', type=int, default=-1, help='Batch size for training and inference, pass -1 for using default')
     parser.add_argument('--gpu', type=int, default='-1', help='GPU index, pass -1 for CPU-only')
     parser.add_argument('--seed', default=1234, type=int, help='Randomization seed, pass -1 for non-deterministic but more efficient behavior')
     parser.add_argument("--use_pretrained", default='', help='Pass a csv summary that lists previous training results, from which the correct model will be loaded')
     parser.add_argument("--discard_model", type=bool, default=False, help="Activate to not store the trained model in the MLflow output directory")
+    parser.add_argument('--subsample', type=float, default=None, help='Subsample train/test to this fraction (smoke testing)')
 
     # model hyperparameters
     parser.add_argument('--prune_rate', type=float, default=0, help='Pruning rate for HYDRA, QUANT and HYDRANT')
+    parser.add_argument('--n_folds', type=int, default=5, help='Number of OOF folds for HYDRANT')
     parser.add_argument("--prune_intermediate", type=str, choices=['ridge', 'xrf', 'rf'], default='ridge', help="Whether to use ridge regression or XRF as intermediate model for obtaining feature importance")
     # QUANT hyperparams
     parser.add_argument('--classifier', type=str, default="xrf", choices=['rf', 'xrf'], help='Classifier type for Quant: XRF or RF')
@@ -95,7 +99,7 @@ if __name__ == '__main__':
     # initialization and data loading
     args = parser.parse_args()
     config = initialization(args)
-    data = load(config) # this adds some extra config entries 
+    data = load(config, subsample=config['subsample']) # this adds some extra config entries
     for key, val in config.items(): # log config information
         if val is not None and (isinstance(val, str) or isinstance(val, int) or isinstance(val, float)):
             mlflow.log_param(key, val)
@@ -106,9 +110,9 @@ if __name__ == '__main__':
         # TRAINING
         model, train_func, init_evaluate = init_train(config, data)
         mlflow.log_param('software', config['software']) # is only set after the initialization
-        gt_tracker = GroundTruthTracker(verbose=False)
+        gt_tracker = GroundTruthTracker(verbose=False, crash_if_unavailable=False) # track ground-truth energy (if available)
+        tracker = EnergyTracker()
         gt_tracker.start()
-        tracker = EnergyTracker(output_dir=config['output_dir'])
         tracker.start()
         if config['use_pretrained']:
             if config['use_pretrained'].endswith('.csv'): # check for path where the original model was stored (given in mlflow experiments summary)
@@ -116,28 +120,28 @@ if __name__ == '__main__':
                     config['use_pretrained'] = os.path.join(os.path.dirname(os.path.dirname(__file__)), config['use_pretrained'])
                 results = pd.read_csv(config['use_pretrained'])
                 crit = (results['status'] == 'FINISHED') & (results['params.model'] == config['model']) & (results['params.dataset'] == config['dataset']) & (results['params.fold'] == config['fold'])
-                pcrit = config['model'] not in ['Hydra', 'Quant', 'Hydrant'] or results['params.prune_rate'] == config['prune_rate']
+                pcrit = config['model'] not in ['Hydra', 'Quant', 'Hydrant', 'HydrantNaive'] or results['params.prune_rate'] == config['prune_rate']
                 c_res = results[crit & pcrit]
-                assert (c_res.shape[0] > 0), f"ERROR: No results found for {config['model']} on {config['dataset']} with fold {config['fold']} - n results={c_res.shape[0]}"
+                assert (c_res.shape[0] > 0), f"ERROR: No pretrained results found for {config['model']} on {config['dataset']} with fold {config['fold']} - n results={c_res.shape[0]}"
                 if c_res.shape[0] > 1:
-                    print(f"WARNING: Multiple results found for {config['model']} on {config['dataset']} with fold {config['fold']}, using first model of {c_res.shape[0]} trained models")
+                    print(f"WARNING: Multiple pretrained results found for {config['model']} on {config['dataset']} with fold {config['fold']}, using first model of {c_res.shape[0]} trained models")
                 config['use_pretrained'] = c_res['params.output_dir'].values[0]
             assert os.path.isdir(config['use_pretrained'])
             print(f"Skipping training, loaded pretrained model from {config['use_pretrained']}")
         else:
             train_func()
+        train_cc = tracker.stop(print_summary=False)
         train_gt = gt_tracker.stop()
-        tracker.stop(print_summary=False)
 
         # INFERENCE
         evaluator = init_evaluate(config, data, model)
+        tracker = EnergyTracker() # needs to be re-initialized, otherwise returned data doesn't align
         gt_tracker.start()
-        tracker = EnergyTracker(output_dir=config['output_dir'])
         tracker.start()
         results, _ = evaluator()
         evaluator() # run eval twice, for longer inference time / more stable results
+        infer_cc = tracker.stop(print_summary=False)
         infer_gt = gt_tracker.stop()
-        tracker.stop(print_summary=False)
 
         # assess parameter count
         try:
@@ -153,21 +157,17 @@ if __name__ == '__main__':
             print('ERROR when assessing parameters:\n', e)
             results['parameters'] = -1
 
-        # assess resource consumption from emissions file
-        emission_data = pd.read_csv(os.path.join(config['output_dir'], 'emissions.csv')).to_dict()
-        results['train_time_total'] = emission_data['duration'][0]
-        results['train_energy_total'] = emission_data['energy_consumed'][0] * 3.6e6 # kwh to ws
-        results['train_time_per_epoch'] = results['train_time_total'] / config["n_epochs"]
-        results['train_energy_per_epoch'] = results['train_energy_total'] / config["n_epochs"]
-        results['infer_time_total'] = emission_data['duration'][1] / 2 # two eval iterations
-        results['infer_energy_total'] = emission_data['energy_consumed'][1] * 3.6e6 / 2 # kwh to ws, two eval iterations
-        results['time_per_sample'] = results['infer_time_total'] / data["test_data"].shape[0]
-        results['energy_per_sample'] = results['infer_energy_total'] / data["test_data"].shape[0]
-        # add ground-truth energy and runtime information
+        # store resource consumption data
+        results['train_time_total'] = train_cc['duration']
+        results['train_energy_total'] = train_cc['energy_consumed'] * 3.6e6 # kwh to ws
+        results['infer_time_total'] = infer_cc['duration'] / 2 # two eval iterations
+        results['infer_energy_total'] = infer_cc['energy_consumed'] * 3.6e6 / 2 # kwh to ws, two eval iterations
         results['gt_train_time_total'] = train_gt['duration']
         results['gt_train_energy_total'] = train_gt['energy_consumed'] * 3.6e6 # kwh to ws
         results['gt_infer_time_total'] = infer_gt['duration']
         results['gt_infer_energy_total'] = infer_gt['energy_consumed'] * 3.6e6 / 2 # kwh to ws, two eval iterations
+        results['time_per_sample'] = results['infer_time_total'] / data["test_data"].shape[0]
+        results['energy_per_sample'] = results['infer_energy_total'] / data["test_data"].shape[0]
 
         print(f"CC: {results['train_energy_total']:4.2f} Ws   GT: {results['gt_train_energy_total']:4.2f} Ws")
 
@@ -176,7 +176,7 @@ if __name__ == '__main__':
             if val is not None:
                 mlflow.log_metric(key, val)
 
-        print(f'{args.model} on {args.dataset} - params: {results["parameters"]/1000:4.1f}k - fit time: {results["train_time_total"]:.2f} s  -  inf time: {results["infer_time_total"]:.2f} s  -  acc: {results["accuracy"]*100:.2f} %  -  results at {os.path.dirname(config["output_dir"])}')
+        print(f'{args.model} on {args.dataset} (fold {args.fold}) - params: {results["parameters"]/1000:4.1f}k - fit time: {results["train_time_total"]:.2f} s  -  inf time: {results["infer_time_total"]:.2f} s  -  acc: {results["accuracy"]*100:.2f} %  -  results at {os.path.dirname(config["output_dir"])}')
         
         mlflow.end_run()
         sys.exit(0)

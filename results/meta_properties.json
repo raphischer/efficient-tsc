@@ -1,13 +1,25 @@
 {
     "energy_per_sample": {
-        "name": "Energy Draw per Sample",
+        "name": "Energy Efficiency per Sample",
         "shortname": "ENI",
         "unit": "wattseconds",
         "group": "Resources"
     },
     "time_per_sample": {
-        "name": "Running Time per Sample",
+        "name": "Time Efficiency per Sample",
         "shortname": "RTI",
+        "unit": "seconds",
+        "group": "Resources"
+    },
+    "train_energy_total": {
+        "name": "Training Energy Efficiency",
+        "shortname": "ENT",
+        "unit": "kilowatthours",
+        "group": "Resources"
+    },
+    "train_time_total": {
+        "name": "Training Time Efficiency",
+        "shortname": "RTT",
         "unit": "seconds",
         "group": "Resources"
     },

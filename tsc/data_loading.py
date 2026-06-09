@@ -31,6 +31,17 @@ def load(config, subsample=None):
     if "Hydra" in config["model"] or 'Quant' in config["model"]: # load special memory-mapping dataset
         ds = BatchDataset(data_path, label_path, batch_size=config['batch_size'], shuffle=False, seed=config['seed'])
         train_index = np.setdiff1d(np.arange(ds.shape[0]), test_index)
+        if subsample is not None:
+            assert isinstance(subsample, float) and 0 < subsample < 1, "subsample should be a float between 0 and 1"
+            # Stratify so every class is represented; RidgeClassifier uses labels as scatter indices.
+            label_npy = np.load(label_path, mmap_mode="r")
+            seed = config['seed'] if config['seed'] >= 0 else None
+            def stratify(idx, floor):
+                target = max(int(subsample * len(idx)), floor)
+                splitter = model_selection.StratifiedShuffleSplit(1, train_size=target, random_state=seed)
+                sub, _ = next(splitter.split(np.zeros(len(idx)), label_npy[idx]))
+                return idx[sub]
+            train_index, test_index = stratify(train_index, 100), stratify(test_index, 50)
         data = {'train_data': ds[train_index], 'test_data': ds[test_index].unbatch()}
         config['labels'] = data['train_data'].classes
         ds.close()

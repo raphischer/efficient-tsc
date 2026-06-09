@@ -1,31 +1,30 @@
 # Sustainable Time Series Classification - Code & Results
 
-This repository accompanies our research paper on **Pruning Extensions and Efficiency Trade-Offs for Sustainable Time Series Classification**, which is currently under review and published as a [preprint on arXiv](https://arxiv.org/abs/2604.07953). 
+This repository accompanies our research paper on **Pruning Extensions and Efficiency Trade-Offs for Sustainable Time Series Classification**, which is currently under review and published as a [preprint on arXiv](https://arxiv.org/abs/2604.07953). Note that minor deviations might occur, since we made several changes to the code, logic, and results since publishing the preprint (Hydrant now combines Quant features with Hydra logits, as described for the [QFeat-HLogit-ET variant](https://arxiv.org/pdf/2512.06666)).
 
-Our work systematically explores predictive performance, runtime, and energy consumption in TSC across models, datasets, and hardware setups. As contributions, we
+In short, our work systematically explores predictive performance, runtime, and energy consumption in TSC across models, datasets, and hardware setups. As contributions, we
 
 - Propose a **holistic evaluation framework** for comparing quality vs. resources in TSC
 - Apply a **theoretically bounded pruning strategy** to state-of-the-art hybrid classifiers `Hydra` and `Quant`
 - Introduce the novel `Hydrant` model variant, combining both feature transformations
-- Conduct **4000+ experimental evaluations** across:
+- Conduct **4000+ experimental runs** across:
   - 20 MONSTER datasets  
   - 13 TSC methods  
-  - 3 hardware environments
-  - various hyperparameters
+  - 3 compute environments
 
 ## 📂 Repository Structure
 
 ```
+.
 ├── results/                   # Experimental logs and figures
 ├── tsc/                       # Code for running experiments
-├── .gitignore
-├── README.md
-├── requirements.txt           # Python dependencies
 ├── run_analysis.py            # Analysis & exploration (based on STREP)
 ├── run_deep_train.sh          # Train deep learning models
 ├── run_deep_eval.sh           # Evaluate deep learning models
 ├── run_hybrid_train.sh        # Train hybrid and pruned models
-└── run_hybrid_eval.sh         # Evaluate hybrid and pruned models
+├── run_hybrid_eval.sh         # Evaluate hybrid and pruned models
+├── requirements.txt           # Python dependencies
+└── README.md
 ```
 
 ## 👨‍💻 Usage
@@ -35,8 +34,6 @@ Install dependencies (tested with Python 3.12):
 ```bash
 pip install -r requirements.txt
 ```
-
-After that, you can explore our results or run custom experiments!
 
 ### 📊 Analysis & Interactive Exploration
 
@@ -53,18 +50,18 @@ You can then use MLflow to run individual experiments, which will automatically 
 As such, to train and evaluate a TSC model for a specific configuration, simply call
 
 ```bash
-mlflow run -e main.py ./ts_archive_experiments
+mlflow run -e main.py ./tsc
 ```
 
 In this run command, you can also use the `-P` syntax to adjust the configuration parameters of our [main.py script](tsc/main.py), for example to evaluate the `P80Hydra` model on the main GPU and `Pedestrian` data:
 
 ```bash
-mlflow run -e main.py -P gpu=0 -P dataset=Pedestrian -P model=Hydra -P prune_rate=0.8 ./ts_archive_experiments
+mlflow run -e main.py -P gpu=0 -P dataset=Pedestrian -P model=Hydra -P prune_rate=0.8 ./tsc
 ```
 
 #### Additional Setup
 1. For accessing the [MONSTER](https://huggingface.co/monster-monash) datasets, you might need to log in to Hugging Face on your machine. In the newly created experiment environment, run `huggingface-cli login`.
-2. Energy tracking via [CodeCarbon and Groundtruth Smart Sockets](https://github.com/lamarr-institute/lamarr-energy-tracker) is included in our code, but remember that [CodeCarbon](https://github.com/mlco2/codecarbon) might require [special permissions for measuring CPU energy via RAPL](https://docs.codecarbon.io/latest/introduction/rapl/). If there are any issues, just remove the tracking from our [main.py](tsc/main.py).
+2. Energy tracking via [CodeCarbon and Groundtruth Smart Sockets](https://github.com/lamarr-institute/lamarr-energy-tracker) is included in our code, but remember that [CodeCarbon](https://github.com/mlco2/codecarbon) might require [special permissions for measuring CPU energy via RAPL](https://docs.codecarbon.io/latest/introduction/rapl/). If there are issues, just remove the tracking in [main.py script](tsc/main.py).
 3. Some models like MLP and MCDCNN were observed to occasionally crash for certain configurations. One central issue is the handling of `nan` probabilities, which can be manually fixed by changing lines 78-82 in `[conda_env_dir]/lib/python3.12/site-packages/sktime/classification/deep_learning/base.py` to
 
 ```python
@@ -75,9 +72,9 @@ return np.array([
 )
 ```
 
-#### Run All Experiments
+### Run All Experiments
 
-You can use our bash scripts to rerun all experimental configurations. They also automatically create experiment summaries, similar to the csv files in our [results](results/) directory. Make sure to provide the correct command-line parameters for your setup, as they are passed onto the [main.py script](tsc/main).
+You can use our bash scripts to run all experimental configurations. They also iteratively create a experiment summary, similar to the csv files in our [results](results/) directory. Make sure to provide the correct command-line parameters for your setup, as they are passed to our [main.py script](tsc/main).
 
 ```bash
 bash run_deep_train.sh [gpu_id] [data_dir] [results_dir] # trains standard and special DL classifiers
@@ -91,12 +88,12 @@ bash run_deep_eval.sh [gpu_id] [data_dir] [results_dir] [deep_csv_summary] # eva
 bash run_hybrid_eval.sh [gpu_id] [data_dir] [results_dir] [pruned_csv_summary] # evaluates Quant, Hydra, Hydrant and pruned variants
 ```
 
-### 📝 Citing
+## 📝 Citing
 
-If you appreciate our work and code, please cite our [paper](https://arxiv.org/abs/2604.07953):
+If you appreciate our work and code, please cite our paper:
 
 ```
-@article{fischer_efftsc,
+@article{fischer2026pruningextensionsefficiencytradeoffs,
       title={Pruning Extensions and Efficiency Trade-Offs for Sustainable Time Series Classification}, 
       author={Raphael Fischer and Angus Dempster and Sebastian Buschjäger and Matthias Jakobs and Urav Maniar and Geoffrey I. Webb},
       year={2026},

@@ -1,11 +1,10 @@
-# Angus Dempster, Chang Wei Tan, Lynn Miller
-# Navid Mohammadi Foumani, Daniel F Schmidt, and Geoffrey I Webb
-# Highly Scalable Time Series Classification for Very Large Datasets
-# AALTD 2024 (ECML PKDD 2024)
+# based on original AALTD 2024 implementation by Angus Dempster, Daniel F Schmidt, Geoffrey I Webb
+# Highly Scalable Time Series Classification for Very Large Datasets @ AALTD 2024 (ECML PKDD 2024)
+# https://github.com/angus924/aaltd2024
+# HYDRA: Competing Convolutional Kernels for Fast and Accurate Time Series Classification
+# https://doi.org/10.1007/s10618-023-00939-3
 
-# Angus Dempster, Daniel F Schmidt, Geoffrey I Webb
-# QUANT: A Minimalist Interval Method for Time Series Classification
-# ECML PKDD 2024
+# adaptions and improvements by ANON2
 
 import os
 import joblib
@@ -15,7 +14,21 @@ from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 import torch, torch.nn.functional as F
 from tqdm import tqdm
 
-# == generate intervals ========================================================
+# representation_functions 
+
+def identity(X):
+    return X
+
+def avg_pool_diff(X):
+    return F.avg_pool1d(F.pad(X.diff(), (2, 2), "replicate"), 5, 1)
+
+def diff2(X):
+    return X.diff(n=2)
+
+def fft_abs(X):
+    return torch.fft.rfft(X).abs()
+
+# generate intervals
 
 def make_intervals(input_length, depth):
 
@@ -43,7 +56,7 @@ def make_intervals(input_length, depth):
 
     return torch.cat(intervals)
 
-# == quantile function =========================================================
+# quantile function
 
 def f_quantile(X, div = 4):
 
@@ -70,25 +83,27 @@ def f_quantile(X, div = 4):
 
             return quantiles.view(quantiles.shape[0], 1, quantiles.shape[1] * quantiles.shape[2])
 
-# == interval model (per representation) =======================================
+# interval model (per representation)
 
 class IntervalModel():
 
-    def __init__(self, input_length, depth = 6, div = 4):
+    def __init__(self, func, input_length, depth = 6, div = 4):
 
         assert div >= 1
         assert depth >= 1
-
+        self.func = func
         self.div = div
-
         self.intervals = make_intervals(input_length=input_length, depth=depth)
         self.important_intervals = None # will be transformed to a list after pruning
         self.ft_map = []
 
     def transform(self, X):
 
+        if not isinstance(X, torch.Tensor):
+            X = torch.tensor(X.astype(np.float32, copy=False))
+        X = self.func(X)
         features = []
-        store_ft_map = self.ft_map == [] # in the first data pass, store a map of feature indices to intervals and representations
+        store_ft_map = self.ft_map == [] # pre-pruning, this stores a map of feature indices to intervals and representations
 
         if self.important_intervals is None: # before pruning
             for idx, (a, b) in enumerate(self.intervals):
@@ -102,56 +117,34 @@ class IntervalModel():
         
         return torch.cat(features, -1)
 
-# representation_functions 
-def identity(X):
-    return X
+# complete quant transformation
 
-def avg_pool_diff(X):
-    return F.avg_pool1d(F.pad(X.diff(), (2, 2), "replicate"), 5, 1)
+class QuantTransform:
 
-def diff2(X):
-    return X.diff(n=2)
-
-def fft_abs(X):
-    return torch.fft.rfft(X).abs()
-
-# == quant =====================================================================
-
-class QuantTransform():
-
-    def __init__(self, depth = 6, div = 4):
+    def __init__(self, ts_channels, ts_length, depth=6, div=4):
 
         assert depth >= 1
         assert div >= 1
 
         self.depth = depth
         self.div = div
-        self.representation_functions = (identity, avg_pool_diff, diff2, fft_abs)
-        self.models = {}
-        self.num_features = None
+        self.models = []
+        # init the transformation (formerly required fit_transform call)
+        dummy_data, dummy_ft = torch.zeros((10, ts_channels, ts_length)), []
+        for func in [identity, avg_pool_diff, diff2, fft_abs]:
+            Z = func(dummy_data)
+            self.models.append( IntervalModel(func=func, input_length=Z.shape[-1], depth=self.depth, div=self.div))
+            dummy_ft.append(self.models[-1].transform(dummy_data))
+        self.num_features = torch.cat(dummy_ft, -1).shape[1]
+        self.number_of_trained_parameters = 0
 
-    def transform(self, X, test=False):
-        assert self.num_features is not None
-        # calculate all representations and apply individual interval quantile models
+    def transform(self, X, indices=None): # unified API, indices only used in Hydrant transformation
+        # calculate features across all representation models
         features = []
-        for idx, func in enumerate(self.representation_functions):
-            if self.models[idx].important_intervals is None or len(self.models[idx].important_intervals) > 0:
-                features.append( self.models[idx].transform(func(X)) )
-
+        for model in self.models:
+            if model.important_intervals is None or len(model.important_intervals) > 0:
+                features.append(model.transform(X))
         res = torch.cat(features, -1)
-        return res
-        
-    def fit_transform(self, X, Y):
-
-        features = []
-        for idx, func in enumerate(self.representation_functions):
-            # create interval transformers based on representation
-            Z = func(X)
-            self.models[idx] = IntervalModel(input_length=Z.shape[-1], depth=self.depth, div=self.div)
-            features.append(self.models[idx].transform(Z))
-        
-        res = torch.cat(features, -1)
-        self.num_features = res.shape[1]
         return res
 
 class BatchedTransformRF:
@@ -179,12 +172,8 @@ class BatchedTransformRF:
         
         for i, (X, Y) in enumerate(tqdm(training_data, total=num_batches)):
             self.classifier.n_estimators += num_estimators_per_batch[i]
-            
-            if i == 0:
-                Z = self.transform.fit_transform(torch.tensor(X.astype(np.float32, copy=False)), Y)
-            else:
-                Z = self.transform.transform(torch.tensor(X.astype(np.float32, copy=False)))
-
+            indices = training_data._batches[training_data._batch_index-1] # needed by Hydrant
+            Z = self.transform.transform(X, indices=indices)
             self.classifier.fit(Z.to('cpu'), Y)
 
     def _set_num_estimators(self, num_batches):
@@ -206,7 +195,7 @@ class BatchedTransformRF:
         Y0, i = np.zeros((test_data.shape[0]), dtype=np.int64), 0
         for X, _ in tqdm(test_data, total=np.ceil(test_data.shape[0]/test_data.batch_size)):
             j = i + X.shape[0]
-            Z = self.transform.transform(torch.tensor(X.astype(np.float32)), test=True)
+            Z = self.transform.transform(X)
             Y0[i:j] = self.classifier.predict(Z.to('cpu'))
             i = j
         return Y0
@@ -248,6 +237,6 @@ class BatchedTransformRF:
 
 class QuantClassifier(BatchedTransformRF):
 
-    def __init__(self, classifier='XRF', num_estimators=100, max_depth=20, max_features=0.1, criterion="entropy", seed=None, limit_mb=-1):
-        self.transform = QuantTransform()
+    def __init__(self, ts_channels, ts_length, classifier='XRF', num_estimators=100, max_depth=20, max_features=0.1, criterion="entropy", seed=None, limit_mb=-1):
+        self.transform = QuantTransform(ts_channels, ts_length)
         super().__init__(classifier, self.transform, num_estimators, criterion, max_features, max_depth, seed, limit_mb)

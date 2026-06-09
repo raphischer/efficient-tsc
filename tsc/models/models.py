@@ -19,7 +19,7 @@ def analyze(predictions, targets, class_names, fsize=-1):
 
 def init_train(config, data):
     # torch-based models
-    if config['model'] in ['SFCN', 'ConvTran', 'Quant', 'Hydra', 'Hydrant']:
+    if config['model'] in ['SFCN', 'ConvTran', 'Quant', 'Hydra', 'Hydrant', 'HydrantNaive']:
         from models.torch_utils import init_torch
         init_torch(config)
         train_func = init_train_torch if config['model'] in ['SFCN', 'ConvTran'] else init_train_hydra_quant
@@ -66,7 +66,10 @@ def init_train_sktime(config, data, model_class):
 
 def init_train_hydra_quant(config, data):
     # novel combination of Hydra and Quant that also internally supports pruning
-    if config['model'] == 'Hydrant':
+    if config['model'] == 'HydrantNaive':
+        from models.hydrant_naive import HydrantNaive
+        model = HydrantNaive(config)
+    elif config['model'] == 'Hydrant':
         from models.hydrant import Hydrant
         model = Hydrant(config)
     elif config['model'] == 'Hydra':
@@ -79,10 +82,12 @@ def init_train_hydra_quant(config, data):
     elif config['model'] == 'Quant':
         if config['prune_rate'] > 0: # custom pruned Quant variant
             from models.pruning import PrunedQuant
-            model = PrunedQuant(prune_rate=config['prune_rate'], prune_intermediate=config['prune_intermediate'], classifier=config['classifier'], num_estimators=config['num_estimators'], max_depth=config['max_depth'], max_features=config['max_features'], criterion=config['criterion'], seed=config['seed'])
+            model = PrunedQuant(config['n_channels'], config['length'], # quant transform init
+                                config['prune_rate'], config['prune_intermediate'], # prune info
+                                config['classifier'], config['num_estimators'], config['max_depth'], config['max_features'], config['criterion'], config['seed'])
         else: # original Quant, taken from https://github.com/angus924/aaltd2024
             from models.quant import QuantClassifier
-            model = QuantClassifier(classifier=config['classifier'], num_estimators=config['num_estimators'], max_depth=config['max_depth'], max_features=config['max_features'], criterion=config['criterion'], seed=config['seed'])
+            model = QuantClassifier(config['n_channels'], config['length'], config['classifier'], config['num_estimators'], config['max_depth'], config['max_features'], config['criterion'], config['seed'])
         
     train_func = lambda: model.fit(data['train_data'], num_classes=config['n_labels']) # num classes required for hydra variants!
 

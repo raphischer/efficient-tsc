@@ -4,8 +4,7 @@ import time
 import numpy as np
 import torch, torch.nn as nn
 from tqdm import tqdm
-
-from models.quant import QuantTransform
+from sklearn.model_selection import train_test_split
 
 EPS = np.finfo(np.float32).eps
 
@@ -79,12 +78,6 @@ class RidgeClassifier():
         self.seed = seed
 
     def fit(self, training_data, **kwargs):
-
-        if isinstance(self.transform, QuantTransform):
-            _ = self.transform.fit_transform(torch.tensor(training_data.X[:2].astype(np.float32)), training_data.Y[:2])
-            trnsf = lambda x: self.transform.transform(torch.tensor(x.astype(np.float32)))
-        else:
-            trnsf = lambda x: self.transform(torch.tensor(x.astype(np.float32), device=self.device))
             
         n, p, k = training_data.shape[0], self.transform.num_features, kwargs.get("num_classes", len(training_data.classes))
         max_val_size = kwargs.get("max_val_size", 8_192)
@@ -95,11 +88,16 @@ class RidgeClassifier():
             # calculate transformation features
             X0, Y0 = torch.zeros((n, p), device = self.device), torch.zeros((n, k), device = self.device)
             i = 0
-            for X, Y in tqdm(training_data, total=np.ceil(n/training_data.batch_size), desc="Direct ridge fitting (n < p)"):
+            for X, Y in tqdm(training_data, total=np.ceil(n/training_data.batch_size), desc="Ridge single pass (n < p)"):
                 j = i + X.shape[0]
-                _X = trnsf(X)
-                _Y = binarize(Y, k)
-                X0[i:j], Y0[i:j] = _X, _Y
+                _idc = training_data._batches[training_data._batch_index-1] # retrieve indices for Hydrant
+                if training_data._batch_index == len(training_data._batches): # last batch, potentially wrapping! shrink X, Y and _idcs
+                    n_exp, bsize = X0[i:j].shape[0], X.shape[0]
+                    X = X[(bsize-n_exp):bsize]
+                    Y = Y[(bsize-n_exp):bsize]
+                    _idc = _idc[(bsize-n_exp):bsize]
+                X0[i:j] = self.transform.transform(X, indices=_idc).to(self.device)
+                Y0[i:j] = binarize(Y, k)
                 i = j
 
             # scale features
@@ -137,7 +135,9 @@ class RidgeClassifier():
         else: # n >= p => memory-efficient fitting, estimating the LOOCV error with a validation set - see Dempster et al. @ AALTD 2024
 
             # split data
-            TR, VA = stratified_split(training_data.Y, val_size, self.seed)
+            TR, VA = stratified_split(training_data.Y, val_size, self.seed) # TODO why not use sklearn's stratified splitting logic?
+            # TR_SK, VA_SK = train_test_split(np.arange(n), test_size=val_size, stratify=training_data.Y, random_state=self.seed) # sklearn's stratified splitting logic for sanity check
+            
             TR, VA = np.sort(TR), np.sort(VA)
             training_data_1, validation_data = training_data[TR], training_data[VA]
             n1, n2 = training_data_1.shape[0], validation_data.shape[0]
@@ -148,19 +148,17 @@ class RidgeClassifier():
             count = 0
             
             for X, Y in tqdm(training_data_1, total=np.ceil(n1/training_data_1.batch_size), desc="Ridge 1st pass (Welford's algorithm)"):
-                _X = trnsf(X)
-                _Y = binarize(Y, k).to(self.device)
-                
+                _idc = training_data_1._batches[training_data_1._batch_index-1] # retrieve indices for Hydrant
+                _X = self.transform.transform(X, indices=_idc).to(device=self.device, dtype=torch.float64)
+                _Y = binarize(Y, k).to(device=self.device, dtype=torch.float64)
                 batch_size = _X.shape[0]
-                _X_f64 = _X.double()
-                _Y_f64 = _Y.double()
                 
                 # Welford update for mean
                 for i in range(batch_size):
                     count += 1
-                    delta_X = _X_f64[i] - mean_X
+                    delta_X = _X[i] - mean_X
                     mean_X += delta_X / count
-                    delta_Y = _Y_f64[i] - mean_Y
+                    delta_Y = _Y[i] - mean_Y
                     mean_Y += delta_Y / count
             
             # Initialize scaler with computed mean
@@ -177,12 +175,13 @@ class RidgeClassifier():
             XTY = torch.zeros((p, k), device=self.device, dtype=torch.float64)
             
             for X, Y in tqdm(training_data_1, total=np.ceil(n1/training_data_1.batch_size), desc="Ridge 2nd pass (gram matrix with scaling)"):
-                _X = trnsf(X)
-                _Y = binarize(Y, k).to(self.device)
+                _idc = training_data_1._batches[training_data_1._batch_index-1] # retrieve indices for Hydrant
+                _X = self.transform.transform(X, indices=_idc).to(device=self.device, dtype=torch.float64)
+                _Y = binarize(Y, k).to(device=self.device, dtype=torch.float64)
                 
                 # Scale using the stable mean computed in first pass
-                _X_scaled = self.X_scaler.scale(_X).double()
-                _Y_scaled = self.Y_scaler.scale(_Y).double()
+                _X_scaled = self.X_scaler.scale(_X)
+                _Y_scaled = self.Y_scaler.scale(_Y)
                 
                 XTX += _X_scaled.T @ _X_scaled
                 XTY += _X_scaled.T @ _Y_scaled
@@ -194,11 +193,12 @@ class RidgeClassifier():
             # calculate validation transformation features
             XV, YV = torch.zeros((n2, p), device=self.device), torch.zeros(n2, dtype=torch.int64, device=self.device)
             i = 0
-            for i, (X, Y) in enumerate(validation_data):
+            for i, (X, Y) in enumerate(tqdm(validation_data, desc="Ridge 3rd passt (LOOCV validation)")):
                 j = i + X.shape[0]
-                X_ = trnsf(X)
-                _XV = self.X_scaler.scale(X_)
-                XV[i:j], YV[i:j] = _XV, torch.tensor(Y, dtype = torch.int64)
+                _idc = validation_data._batches[validation_data._batch_index-1] # retrieve indices for Hydrant
+                X_ = self.transform.transform(X, indices=_idc).to(device=self.device, dtype=torch.float64)
+                XV[i:j] = self.X_scaler.scale(X_)
+                YV[i:j] = torch.tensor(Y, dtype=torch.int64, device=self.device)
                 i = j
 
             # perform ridge regression with LOOCV on validation set
@@ -255,16 +255,13 @@ class RidgeClassifier():
         return sum(fsizes)
 
     def count_params(self):
-        p_transf = 0 if isinstance(self.transform, QuantTransform) else self.transform.I.shape.numel() + self.transform.W.shape.numel()
+        p_transf = self.transform.number_of_trained_parameters
         p_scaler = sum([ s._mean.numel() + s._std.numel() + s._count.numel() + s._eps.numel() for s in [self.X_scaler, self.Y_scaler]])
         return p_transf + p_scaler + self.B.numel() + self.B0.numel()
     
     def _predict_single(self, X):
-        if isinstance(self.transform, QuantTransform):
-            _X = self.transform.transform(torch.tensor(X.astype(np.float32)))
-        else:
-            _X = self.transform(torch.tensor(X.astype(np.float32, copy=False)).to(self.device))
-        _X = self.X_scaler.to(_X.device).scale(_X)
+        _X = self.transform.transform(X).to(self.device)
+        _X = self.X_scaler.scale(_X)
         res = _X @ self.B + self.B0
         return res
 
