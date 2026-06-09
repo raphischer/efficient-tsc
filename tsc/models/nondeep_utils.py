@@ -1,11 +1,8 @@
-# taken from https://github.com/Navidfoumani/monster/blob/main/models/non_deep/utils.py
-# added bug fix in lines 300-302: min(num_classes, _batch.shape[-1])
-# added .X @property for Dataset and BatchDataset
+# based on original AALTD 2024 implementation by Angus Dempster, Daniel F Schmidt, Geoffrey I Webb
+# Highly Scalable Time Series Classification for Very Large Datasets @ AALTD 2024 (ECML PKDD 2024)
+# https://github.com/angus924/aaltd2024
 
-# Angus Dempster, Chang Wei Tan, Lynn Miller
-# Navid Mohammadi Foumani, Daniel F Schmidt, and Geoffrey I Webb
-# Highly Scalable Time Series Classification for Very Large Datasets
-# AALTD 2024 (ECML PKDD 2024)
+# adaptions and improvements by raphischer
 
 import numpy as np
 import torch

@@ -4,7 +4,7 @@
 # HYDRA: Competing Convolutional Kernels for Fast and Accurate Time Series Classification
 # https://doi.org/10.1007/s10618-023-00939-3
 
-# adaptions and improvements by ANON2
+# adaptions and improvements by raphischer
 
 import os
 import joblib

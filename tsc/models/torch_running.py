@@ -1,3 +1,10 @@
+
+# based on original Monster implementation by Angus Dempster, Navid Mohammadi Foumani and others
+# MONSTER: Monash Scalable Time Series Evaluation Repository
+# https://github.com/Navidfoumani/monster
+
+# adaptions and improvements by raphischer
+
 import os
 import time
 from collections import OrderedDict

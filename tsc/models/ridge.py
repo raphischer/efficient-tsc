@@ -1,3 +1,9 @@
+# based on original AALTD 2024 implementation by Angus Dempster, Daniel F Schmidt, Geoffrey I Webb
+# Highly Scalable Time Series Classification for Very Large Datasets @ AALTD 2024 (ECML PKDD 2024)
+# https://github.com/angus924/aaltd2024
+
+# adaptions and improvements by raphischer
+
 import os
 import time
 
